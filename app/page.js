@@ -96,8 +96,14 @@ export default function Home() {
     // Look for JSON objects or arrays in the text
     let jsonContent = processed;
 
-    // If the content starts with text, try to find JSON within it
-    if (!processed.startsWith('{') && !processed.startsWith('[')) {
+    // 首先尝试使用平衡括号提取（更可靠）
+    const balancedSnippet = extractBalancedJsonSnippet(processed);
+
+    if (balancedSnippet) {
+      jsonContent = balancedSnippet;
+      console.log('Extracted balanced JSON snippet from generated text');
+    } else if (!processed.startsWith('{') && !processed.startsWith('[')) {
+      // 如果平衡提取失败，回退到简单的正则匹配
       // Look for JSON object
       const objectMatch = processed.match(/\{[\s\S]*\}/);
       if (objectMatch) {
@@ -142,23 +148,23 @@ export default function Home() {
     let inString = false;
     let escapeNext = false;
     let currentQuotePos = -1;
-    
+
     for (let i = 0; i < jsonString.length; i++) {
       const char = jsonString[i];
       const prevChar = i > 0 ? jsonString[i - 1] : '';
-      
+
       if (escapeNext) {
         result += char;
         escapeNext = false;
         continue;
       }
-      
+
       if (char === '\\') {
         result += char;
         escapeNext = true;
         continue;
       }
-      
+
       if (char === '"') {
         if (!inString) {
           // Starting a string
@@ -170,7 +176,7 @@ export default function Home() {
           // Check if this is a structural quote (followed by : or , or } or ])
           const nextNonWhitespace = jsonString.slice(i + 1).match(/^\s*(.)/);
           const nextChar = nextNonWhitespace ? nextNonWhitespace[1] : '';
-          
+
           if (nextChar === ':' || nextChar === ',' || nextChar === '}' || nextChar === ']' || nextChar === '') {
             // This is a closing quote for the string
             inString = false;
@@ -184,8 +190,168 @@ export default function Home() {
         result += char;
       }
     }
-    
+
     return result;
+  };
+
+  // 括号映射：用于自动补全
+  const closingBracketMap = { '{': '}', '[': ']' };
+
+  /**
+   * 从文本中提取平衡的 JSON 片段（使用栈追踪括号匹配）
+   * 这个函数比简单的正则更可靠，可以正确处理嵌套结构
+   */
+  const extractBalancedJsonSnippet = (text) => {
+    const stack = [];
+    let startIndex = -1;
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
+      // 处理转义字符
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escapeNext = true;
+        continue;
+      }
+
+      // 处理字符串内容（字符串内的括号不计数）
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) {
+        continue;
+      }
+
+      // 遇到开括号时入栈
+      if (char === '{' || char === '[') {
+        if (stack.length === 0) {
+          startIndex = i;
+        }
+        stack.push(char);
+      }
+      // 遇到闭括号时出栈
+      else if (char === '}' || char === ']') {
+        const lastOpen = stack[stack.length - 1];
+        const matches =
+          (lastOpen === '{' && char === '}') ||
+          (lastOpen === '[' && char === ']');
+
+        if (matches) {
+          stack.pop();
+          // 栈空了说明找到了完整的平衡片段
+          if (stack.length === 0 && startIndex !== -1) {
+            return text.slice(startIndex, i + 1);
+          }
+        } else if (stack.length > 0) {
+          // 括号不匹配，重置状态
+          stack.length = 0;
+          startIndex = -1;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  /**
+   * 分析 JSON 结构，检测括号平衡性和缺失的括号
+   * 返回诊断信息帮助用户理解问题
+   */
+  const analyzeJsonStructure = (text) => {
+    const stack = [];
+    let inString = false;
+    let escapeNext = false;
+    let hasMismatchedClosing = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escapeNext = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) {
+        continue;
+      }
+
+      if (char === '{' || char === '[') {
+        stack.push(char);
+      } else if (char === '}' || char === ']') {
+        const lastOpen = stack[stack.length - 1];
+        const matches =
+          (lastOpen === '{' && char === '}') ||
+          (lastOpen === '[' && char === ']');
+
+        if (matches) {
+          stack.pop();
+        } else {
+          hasMismatchedClosing = true;
+        }
+      }
+    }
+
+    // 根据栈中剩余的开括号，生成需要补全的闭括号
+    const pendingClosers = stack
+      .slice()
+      .reverse()
+      .map((open) => closingBracketMap[open] || '')
+      .join('');
+
+    return {
+      isBalanced: stack.length === 0 && !hasMismatchedClosing,
+      pendingClosers,
+      pendingCount: stack.length,
+      hasMismatchedClosing,
+    };
+  };
+
+  /**
+   * 统一检查解析后的数据，提取 elements 数组
+   * 支持多种常见的数据结构
+   */
+  const inspectParsedElements = (parsed) => {
+    // 直接是数组
+    if (Array.isArray(parsed)) {
+      return { elements: parsed, source: 'array' };
+    }
+
+    // 对象结构
+    if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed.elements)) {
+        return { elements: parsed.elements, source: 'parsed.elements' };
+      }
+      if (Array.isArray(parsed.data) && Array.isArray(parsed.data[0]?.elements)) {
+        return {
+          elements: parsed.data[0].elements,
+          source: 'parsed.data[0].elements',
+        };
+      }
+      if (Array.isArray(parsed.data?.elements)) {
+        return { elements: parsed.data.elements, source: 'parsed.data.elements' };
+      }
+    }
+
+    return null;
   };
 
   // Handle sending a message (single-turn)
@@ -321,32 +487,23 @@ export default function Home() {
       console.log('Parsing code:', cleanedCode.substring(0, 200) + (cleanedCode.length > 200 ? '...' : ''));
 
       let elementsArray = null;
+      const structureAnalysis = analyzeJsonStructure(cleanedCode);
+      const parseDiagnostics = [];
 
       // Try to parse as JSON directly first
       try {
         const parsed = JSON.parse(cleanedCode);
+        const parsedInfo = inspectParsedElements(parsed);
 
-        // If it's an array, use it directly
-        if (Array.isArray(parsed)) {
-          elementsArray = parsed;
-          console.log('Successfully parsed as array with', parsed.length, 'elements');
-        }
-        // If it's an object, try to extract elements
-        else if (typeof parsed === 'object' && parsed !== null) {
-          if (Array.isArray(parsed.elements)) {
-            elementsArray = parsed.elements;
-            console.log('Extracted elements from object with', elementsArray.length, 'items');
-          } else if (Array.isArray(parsed.data) && Array.isArray(parsed.data[0]?.elements)) {
-            elementsArray = parsed.data[0].elements;
-            console.log('Extracted elements from data[0].elements with', elementsArray.length, 'items');
-          } else if (Array.isArray(parsed.data?.elements)) {
-            elementsArray = parsed.data.elements;
-            console.log('Extracted elements from data.elements with', elementsArray.length, 'items');
-          } else {
-            console.log('Object found but no elements array detected:', Object.keys(parsed));
-          }
+        if (parsedInfo) {
+          elementsArray = parsedInfo.elements;
+          console.log('Successfully parsed via', parsedInfo.source, 'with', elementsArray.length, 'elements');
+        } else {
+          console.log('Object found but no elements array detected:',
+            parsed && typeof parsed === 'object' ? Object.keys(parsed) : parsed);
         }
       } catch (directParseError) {
+        parseDiagnostics.push(`直接解析失败：${directParseError.message}`);
         console.log('Direct JSON parse failed, trying regex extraction:', directParseError.message);
       }
 
@@ -356,13 +513,37 @@ export default function Home() {
         if (arrayMatch) {
           try {
             const parsed = JSON.parse(arrayMatch[0]);
-            if (Array.isArray(parsed)) {
-              elementsArray = parsed;
-              console.log('Successfully parsed using regex extraction with', parsed.length, 'elements');
+            const parsedInfo = inspectParsedElements(parsed);
+
+            if (parsedInfo) {
+              elementsArray = parsedInfo.elements;
+              console.log('Successfully parsed using regex extraction with', elementsArray.length, 'elements');
+            } else {
+              parseDiagnostics.push('正则提取后的 JSON 中没有可用的元素数组');
             }
           } catch (regexError) {
+            parseDiagnostics.push(`正则提取后的 JSON 解析失败：${regexError.message}`);
             console.log('Regex extraction also failed:', regexError.message);
           }
+        } else {
+          parseDiagnostics.push('未能匹配到 JSON 数组片段');
+        }
+      }
+
+      // Attempt to auto-complete missing closing brackets
+      if (!elementsArray && structureAnalysis.pendingClosers) {
+        const completionSnippet = cleanedCode + structureAnalysis.pendingClosers;
+        try {
+          const parsed = JSON.parse(completionSnippet);
+          const parsedInfo = inspectParsedElements(parsed);
+
+          if (parsedInfo) {
+            elementsArray = parsedInfo.elements;
+            console.log('Auto-completed missing closing brackets and parsed', elementsArray.length, 'elements');
+            parseDiagnostics.push(`自动补全了缺失的 ${structureAnalysis.pendingClosers}`);
+          }
+        } catch (completionError) {
+          parseDiagnostics.push(`补全闭括号后仍解析失败：${completionError.message}`);
         }
       }
 
@@ -374,10 +555,31 @@ export default function Home() {
         return;
       }
 
-      // If we got here, no valid elements were found
-      const errorMsg = '代码中未找到有效的 JSON 数组或元素对象';
-      setJsonError(errorMsg);
-      console.error(errorMsg);
+      // Build detailed error message
+      const baseErrorMsg = '代码中未找到有效的 JSON 数组或元素对象';
+      const hints = [];
+
+      if (structureAnalysis.pendingCount > 0) {
+        hints.push(`似乎缺少 ${structureAnalysis.pendingClosers || '闭括号'}`);
+      }
+      if (structureAnalysis.hasMismatchedClosing) {
+        hints.push('存在括号不匹配');
+      }
+
+      const hintMsg = hints.join('，');
+      const detailMsg = parseDiagnostics.length
+        ? parseDiagnostics.join('；')
+        : '请确认生成的内容为完整的 JSON 数据';
+
+      const preview = cleanedCode
+        .substring(0, 200)
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const finalErrorMsg = `${baseErrorMsg}${hintMsg ? `（${hintMsg}）` : ''}。${detailMsg}。代码片段：${preview || '空'}`;
+
+      setJsonError(finalErrorMsg);
+      console.error(finalErrorMsg);
       console.error('Original code length:', code.length);
       console.error('Cleaned code preview:', cleanedCode.substring(0, 500));
 
