@@ -51,9 +51,8 @@ export async function GET() {
       });
     }
 
-    // 验证 API 连接（可选，用于健康检查）
-    // 这里可以添加实际的健康检查逻辑
-    const healthCheck = await performHealthCheck(baseUrl, apiKey);
+    // 验证 API 连接（使用 /chat/completions 端点）
+    const healthCheck = await performHealthCheck(baseUrl, apiKey, model);
 
     if (!healthCheck.success) {
       return Response.json({
@@ -103,31 +102,56 @@ export async function GET() {
 }
 
 /**
- * 执行 GLM API 健康检查（增强版 - 带详细错误信息）
+ * 执行 GLM API 健康检查（使用 /chat/completions 端点）
  * @param {string} baseUrl - API 基础 URL
  * @param {string} apiKey - API 密钥
+ * @param {string} model - 模型名称
  * @returns {Promise<{success: boolean, error?: object}>}
  */
-async function performHealthCheck(baseUrl, apiKey) {
-  const url = `${baseUrl}/v1/models`;
+async function performHealthCheck(baseUrl, apiKey, model) {
+  const url = `${baseUrl}/chat/completions`;
   const controller = new AbortController();
-  const timeoutMs = 5000;
+  const timeoutMs = 8000; // 增加超时时间到8秒
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    // 发送一个最小的测试请求来验证 API 可用性
     const response = await fetch(url, {
-      method: 'GET',
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'user',
+            content: 'ping'
+          }
+        ],
+        max_tokens: 5, // 最小token数
+        temperature: 0
+      }),
       signal: controller.signal
     });
     clearTimeout(timeoutId);
 
     if (response.ok) {
-      console.log('GLM health check passed', { url, status: response.status });
+      console.log('GLM health check passed', {
+        url,
+        status: response.status,
+        model: model
+      });
       return { success: true };
+    }
+
+    // 尝试解析错误响应体
+    let errorBody = null;
+    try {
+      errorBody = await response.json();
+    } catch {
+      // 如果不是 JSON，忽略
     }
 
     const invalidResponse = {
@@ -135,7 +159,8 @@ async function performHealthCheck(baseUrl, apiKey) {
       code: 'INVALID_RESPONSE',
       url,
       message: `Unexpected status ${response.status} (${response.statusText})`,
-      status: response.status
+      status: response.status,
+      responseBody: errorBody
     };
     console.error('GLM health check invalid response', invalidResponse);
     return { success: false, error: invalidResponse };
