@@ -119,6 +119,10 @@ export default function Home() {
       }
     }
 
+    // Step 2.5: Sanitize JSON-like text to fix common JS-to-JSON deviations
+    jsonContent = sanitizeJsonLikeText(jsonContent);
+    console.log('Applied JSON sanitization');
+
     // Step 3: Try to parse the extracted content as-is first
     try {
       const parsed = JSON.parse(jsonContent);
@@ -140,6 +144,47 @@ export default function Home() {
       // Return original content so user can see what was generated
       return processed;
     }
+  };
+
+  /**
+   * Sanitize JSON-like text to fix common JavaScript-to-JSON deviations
+   * This function converts JS-style code to valid JSON format:
+   * - Removes single-line (//) and multi-line (/* */) comments
+   * - Converts unquoted object keys to quoted keys
+   * - Removes trailing commas before closing brackets/braces
+   * - Converts single quotes to double quotes for strings (with improved handling)
+   */
+  const sanitizeJsonLikeText = (text) => {
+    if (!text || typeof text !== 'string') return text;
+
+    let sanitized = text;
+
+    // Remove multi-line comments (/* ... */)
+    sanitized = sanitized.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // Remove single-line comments (// ...)
+    sanitized = sanitized.replace(/\/\/[^\n\r]*/g, '');
+
+    // Convert unquoted keys to quoted keys
+    // Matches: { key: or , key: and converts to { "key": or , "key":
+    // Note: This is a heuristic that works well for LLM-generated code
+    // but may not handle all edge cases in arbitrary text
+    sanitized = sanitized.replace(/([{,]\s*)([A-Za-z0-9_@$-]+)(\s*:)/g, '$1"$2"$3');
+
+    // Remove trailing commas before closing brackets/braces
+    sanitized = sanitized.replace(/,(\s*[}\]])/g, '$1');
+
+    // Convert single-quoted strings to double-quoted strings
+    // Improved pattern: only replace strings that look like complete string literals
+    // Avoid replacing apostrophes within words (e.g., don't, it's)
+    // Match pattern: 'string content' where content doesn't contain unescaped quotes
+    sanitized = sanitized.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (match, content) => {
+      // Escape any unescaped double quotes in the content
+      const escapedContent = content.replace(/\\'/g, "'").replace(/"/g, '\\"');
+      return `"${escapedContent}"`;
+    });
+
+    return sanitized.trim();
   };
 
   // Helper function to fix unescaped quotes in JSON strings
@@ -490,6 +535,20 @@ export default function Home() {
       const structureAnalysis = analyzeJsonStructure(cleanedCode);
       const parseDiagnostics = [];
 
+      /**
+       * Helper function to append diagnostic messages while preventing duplicates
+       * and limiting the total number of diagnostics to avoid overwhelming the user
+       */
+      const appendDiagnostic = (message) => {
+        if (!message || typeof message !== 'string') return;
+        // Limit diagnostics to 2 most relevant messages
+        if (parseDiagnostics.length >= 2) return;
+        // Prevent duplicate messages
+        if (!parseDiagnostics.includes(message)) {
+          parseDiagnostics.push(message);
+        }
+      };
+
       // Try to parse as JSON directly first
       try {
         const parsed = JSON.parse(cleanedCode);
@@ -503,7 +562,7 @@ export default function Home() {
             parsed && typeof parsed === 'object' ? Object.keys(parsed) : parsed);
         }
       } catch (directParseError) {
-        parseDiagnostics.push(`直接解析失败：${directParseError.message}`);
+        appendDiagnostic(`直接解析失败：${directParseError.message}`);
         console.log('Direct JSON parse failed, trying regex extraction:', directParseError.message);
       }
 
@@ -519,14 +578,14 @@ export default function Home() {
               elementsArray = parsedInfo.elements;
               console.log('Successfully parsed using regex extraction with', elementsArray.length, 'elements');
             } else {
-              parseDiagnostics.push('正则提取后的 JSON 中没有可用的元素数组');
+              appendDiagnostic('正则提取后的 JSON 中没有可用的元素数组');
             }
           } catch (regexError) {
-            parseDiagnostics.push(`正则提取后的 JSON 解析失败：${regexError.message}`);
+            appendDiagnostic(`正则提取后的 JSON 解析失败：${regexError.message}`);
             console.log('Regex extraction also failed:', regexError.message);
           }
         } else {
-          parseDiagnostics.push('未能匹配到 JSON 数组片段');
+          appendDiagnostic('未能匹配到 JSON 数组片段');
         }
       }
 
@@ -540,10 +599,10 @@ export default function Home() {
           if (parsedInfo) {
             elementsArray = parsedInfo.elements;
             console.log('Auto-completed missing closing brackets and parsed', elementsArray.length, 'elements');
-            parseDiagnostics.push(`自动补全了缺失的 ${structureAnalysis.pendingClosers}`);
+            appendDiagnostic(`自动补全了缺失的 ${structureAnalysis.pendingClosers}`);
           }
         } catch (completionError) {
-          parseDiagnostics.push(`补全闭括号后仍解析失败：${completionError.message}`);
+          appendDiagnostic(`补全闭括号后仍解析失败：${completionError.message}`);
         }
       }
 
