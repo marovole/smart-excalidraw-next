@@ -4,10 +4,12 @@ import { useState, useEffect } from 'react';
 import { configManager } from '../lib/config-manager.js';
 import Notification from './Notification';
 import ConfirmDialog from './ConfirmDialog';
+import BuiltinStatus from './BuiltinStatus';
 
 export default function ConfigManager({ isOpen, onClose, onConfigSelect }) {
   const [configs, setConfigs] = useState([]);
   const [activeConfigId, setActiveConfigId] = useState(null);
+  const [isBuiltinActive, setIsBuiltinActive] = useState(false);
   const [editingConfig, setEditingConfig] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -37,8 +39,10 @@ export default function ConfigManager({ isOpen, onClose, onConfigSelect }) {
     try {
       const allConfigs = configManager.getAllConfigs();
       const activeId = configManager.activeConfigId;
+      const builtinActive = configManager.isUsingBuiltin();
       setConfigs(allConfigs);
       setActiveConfigId(activeId);
+      setIsBuiltinActive(builtinActive);
     } catch (err) {
       setError('加载配置失败: ' + err.message);
     }
@@ -104,6 +108,33 @@ export default function ConfigManager({ isOpen, onClose, onConfigSelect }) {
       setError('');
     } catch (err) {
       setError('切换配置失败: ' + err.message);
+    }
+  };
+
+  const handleSetBuiltinActive = async () => {
+    try {
+      await configManager.setBuiltinActive();
+      loadConfigs();
+      onConfigSelect?.(configManager.getActiveConfig());
+      setError('');
+      setNotification({
+        isOpen: true,
+        title: '切换成功',
+        message: '已切换到内置 GLM-4.6',
+        type: 'success'
+      });
+    } catch (err) {
+      setError('切换到内置配置失败: ' + err.message);
+    }
+  };
+
+  const handleSwitchToCustom = () => {
+    // 如果没有自定义配置，打开创建新配置对话框
+    if (configs.length === 0) {
+      handleCreateNew();
+    } else {
+      // 如果有自定义配置，直接切换到第一个
+      handleSetActive(configs[0].id);
     }
   };
 
@@ -289,8 +320,31 @@ export default function ConfigManager({ isOpen, onClose, onConfigSelect }) {
             />
           </div>
 
+          {/* Builtin GLM Status */}
+          <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
+            <h3 className="text-sm font-medium text-gray-900 mb-3 flex items-center">
+              <svg className="w-4 h-4 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              内置 GLM-4.6
+            </h3>
+            <BuiltinStatus onSwitchToCustom={handleSwitchToCustom} />
+          </div>
+
           {/* Config List */}
           <div className="space-y-3">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-gray-900">自定义配置</h3>
+              {!isBuiltinActive && configs.length === 0 && (
+                <button
+                  onClick={handleSetBuiltinActive}
+                  className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
+                >
+                  使用内置 GLM
+                </button>
+              )}
+            </div>
+
             {filteredConfigs.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
                 {searchQuery ? '没有找到匹配的配置' : '暂无配置，点击"新建配置"创建第一个配置'}

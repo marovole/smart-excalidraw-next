@@ -9,6 +9,7 @@ import ContactModal from '@/components/ContactModal';
 import Notification from '@/components/Notification';
 import { getConfig, isConfigValid } from '@/lib/config';
 import { optimizeExcalidrawCode } from '@/lib/optimizeArrows';
+import { configManager } from '@/lib/config-manager.js';
 
 // Dynamically import ExcalidrawCanvas to avoid SSR issues
 const ExcalidrawCanvas = dynamic(() => import('@/components/ExcalidrawCanvas'), {
@@ -37,15 +38,40 @@ export default function Home() {
 
   // Load config on mount and listen for config changes
   useEffect(() => {
-    const savedConfig = getConfig();
-    if (savedConfig) {
-      setConfig(savedConfig);
-    }
+    const initializeConfig = async () => {
+      // Load configurations
+      configManager.loadConfigs();
+
+      // Try to get user config first
+      const savedConfig = configManager.getActiveConfig();
+
+      if (savedConfig) {
+        setConfig(savedConfig);
+      } else {
+        // Try to set builtin GLM as fallback
+        try {
+          const builtinStatus = await configManager.getBuiltinStatus();
+          if (builtinStatus.status === 'ready') {
+            await configManager.setBuiltinActive();
+            const builtinConfig = configManager.getActiveConfig();
+            setConfig(builtinConfig);
+          }
+        } catch (error) {
+          console.log('Builtin GLM not available:', error.message);
+          // No config available, user will need to configure manually
+        }
+      }
+    };
+
+    initializeConfig();
 
     // Listen for storage changes to sync across tabs
     const handleStorageChange = (e) => {
-      if (e.key === 'smart-excalidraw-active-config' || e.key === 'smart-excalidraw-configs') {
-        const newConfig = getConfig();
+      if (e.key === 'smart-excalidraw-active-config' ||
+          e.key === 'smart-excalidraw-configs' ||
+          e.key === 'smart-excalidraw-builtin-active') {
+        configManager.loadConfigs(); // Reload from storage
+        const newConfig = configManager.getActiveConfig();
         setConfig(newConfig);
       }
     };
@@ -57,26 +83,55 @@ export default function Home() {
   // Post-process Excalidraw code: remove markdown wrappers and fix unescaped quotes
   const postProcessExcalidrawCode = (code) => {
     if (!code || typeof code !== 'string') return code;
-    
+
     let processed = code.trim();
-    
+    console.log('Original code:', processed.substring(0, 200) + (processed.length > 200 ? '...' : ''));
+
     // Step 1: Remove markdown code fence wrappers (```json, ```javascript, ```js, or just ```)
     processed = processed.replace(/^```(?:json|javascript|js)?\s*\n?/i, '');
     processed = processed.replace(/\n?```\s*$/, '');
     processed = processed.trim();
-    
-    // Step 2: Fix unescaped double quotes within JSON string values
-    // This is a complex task - we need to be careful not to break valid JSON structure
-    // Strategy: Parse the JSON structure and fix quotes only in string values
+
+    // Step 2: Try to extract JSON content from mixed text
+    // Look for JSON objects or arrays in the text
+    let jsonContent = processed;
+
+    // If the content starts with text, try to find JSON within it
+    if (!processed.startsWith('{') && !processed.startsWith('[')) {
+      // Look for JSON object
+      const objectMatch = processed.match(/\{[\s\S]*\}/);
+      if (objectMatch) {
+        jsonContent = objectMatch[0];
+        console.log('Found JSON object in mixed content');
+      } else {
+        // Look for JSON array
+        const arrayMatch = processed.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          jsonContent = arrayMatch[0];
+          console.log('Found JSON array in mixed content');
+        }
+      }
+    }
+
+    // Step 3: Try to parse the extracted content as-is first
     try {
-      // First, try to parse as-is to see if it's already valid
-      JSON.parse(processed);
-      return processed; // Already valid JSON, no need to fix
+      const parsed = JSON.parse(jsonContent);
+      console.log('Successfully parsed JSON content directly');
+      return jsonContent; // Already valid JSON, no need to fix
     } catch (e) {
-      // JSON is invalid, try to fix unescaped quotes
-      // This regex finds string values and fixes unescaped quotes within them
-      // It looks for: "key": "value with "unescaped" quotes"
-      processed = fixUnescapedQuotes(processed);
+      console.log('Direct parse failed, attempting to fix quotes:', e.message);
+    }
+
+    // Step 4: If direct parse failed, try to fix unescaped quotes
+    try {
+      const fixed = fixUnescapedQuotes(jsonContent);
+      // Test if the fix worked
+      JSON.parse(fixed);
+      console.log('Successfully fixed and parsed JSON content');
+      return fixed;
+    } catch (e) {
+      console.log('Failed to fix JSON content:', e.message);
+      // Return original content so user can see what was generated
       return processed;
     }
   };
@@ -263,22 +318,71 @@ export default function Home() {
 
       // Code is already post-processed, just extract the array and parse
       const cleanedCode = code.trim();
+      console.log('Parsing code:', cleanedCode.substring(0, 200) + (cleanedCode.length > 200 ? '...' : ''));
 
-      // Extract array from code if wrapped in other text
-      const arrayMatch = cleanedCode.match(/\[[\s\S]*\]/);
-      if (!arrayMatch) {
-        setJsonError('代码中未找到有效的 JSON 数组');
-        console.error('No array found in generated code');
+      let elementsArray = null;
+
+      // Try to parse as JSON directly first
+      try {
+        const parsed = JSON.parse(cleanedCode);
+
+        // If it's an array, use it directly
+        if (Array.isArray(parsed)) {
+          elementsArray = parsed;
+          console.log('Successfully parsed as array with', parsed.length, 'elements');
+        }
+        // If it's an object, try to extract elements
+        else if (typeof parsed === 'object' && parsed !== null) {
+          if (Array.isArray(parsed.elements)) {
+            elementsArray = parsed.elements;
+            console.log('Extracted elements from object with', elementsArray.length, 'items');
+          } else if (Array.isArray(parsed.data) && Array.isArray(parsed.data[0]?.elements)) {
+            elementsArray = parsed.data[0].elements;
+            console.log('Extracted elements from data[0].elements with', elementsArray.length, 'items');
+          } else if (Array.isArray(parsed.data?.elements)) {
+            elementsArray = parsed.data.elements;
+            console.log('Extracted elements from data.elements with', elementsArray.length, 'items');
+          } else {
+            console.log('Object found but no elements array detected:', Object.keys(parsed));
+          }
+        }
+      } catch (directParseError) {
+        console.log('Direct JSON parse failed, trying regex extraction:', directParseError.message);
+      }
+
+      // If direct parsing failed, try regex extraction as fallback
+      if (!elementsArray) {
+        const arrayMatch = cleanedCode.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          try {
+            const parsed = JSON.parse(arrayMatch[0]);
+            if (Array.isArray(parsed)) {
+              elementsArray = parsed;
+              console.log('Successfully parsed using regex extraction with', parsed.length, 'elements');
+            }
+          } catch (regexError) {
+            console.log('Regex extraction also failed:', regexError.message);
+          }
+        }
+      }
+
+      // If we found elements, apply them
+      if (elementsArray && Array.isArray(elementsArray)) {
+        setElements(elementsArray);
+        setJsonError(null);
+        console.log('Successfully applied', elementsArray.length, 'elements to canvas');
         return;
       }
 
-      const parsed = JSON.parse(arrayMatch[0]);
-      if (Array.isArray(parsed)) {
-        setElements(parsed);
-        setJsonError(null); // Clear error on success
-      }
+      // If we got here, no valid elements were found
+      const errorMsg = '代码中未找到有效的 JSON 数组或元素对象';
+      setJsonError(errorMsg);
+      console.error(errorMsg);
+      console.error('Original code length:', code.length);
+      console.error('Cleaned code preview:', cleanedCode.substring(0, 500));
+
     } catch (error) {
-      console.error('Failed to parse generated code:', error);
+      console.error('Unexpected error in tryParseAndApply:', error);
       // Extract native JSON error message
       if (error instanceof SyntaxError) {
         setJsonError('JSON 语法错误：' + error.message);
@@ -371,10 +475,18 @@ export default function Home() {
         </div>
         <div className="flex items-center space-x-3">
           {config && isConfigValid(config) && (
-            <div className="flex items-center space-x-2 px-3 py-1.5 bg-green-50 rounded border border-green-300">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-              <span className="text-xs text-green-900 font-medium">
-                {config.name || config.type} - {config.model}
+            <div className={`flex items-center space-x-2 px-3 py-1.5 rounded border ${
+              config.isBuiltin
+                ? 'bg-blue-50 border-blue-300'
+                : 'bg-green-50 border-green-300'
+            }`}>
+              <div className={`w-2 h-2 rounded-full ${
+                config.isBuiltin ? 'bg-blue-500' : 'bg-green-500'
+              }`}></div>
+              <span className={`text-xs font-medium ${
+                config.isBuiltin ? 'text-blue-900' : 'text-green-900'
+              }`}>
+                {config.name || config.type} - {config.model || '内置模型'}
               </span>
             </div>
           )}
