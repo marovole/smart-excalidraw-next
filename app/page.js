@@ -146,14 +146,12 @@ export default function Home() {
     }
   };
 
-  /**
-   * Sanitize JSON-like text to fix common JavaScript-to-JSON deviations
-   * This function converts JS-style code to valid JSON format:
-   * - Removes single-line (//) and multi-line (/* */) comments
-   * - Converts unquoted object keys to quoted keys
-   * - Removes trailing commas before closing brackets/braces
-   * - Converts single quotes to double quotes for strings (with improved handling)
-   */
+  // Sanitize JSON-like text to fix common JavaScript-to-JSON deviations
+  // This function converts JS-style code to valid JSON format:
+  // - Removes single-line (//) and multi-line (/* */) comments
+  // - Converts unquoted object keys to quoted keys
+  // - Removes trailing commas before closing brackets/braces
+  // - Converts single quotes to double quotes for strings (with improved handling)
   const sanitizeJsonLikeText = (text) => {
     if (!text || typeof text !== 'string') return text;
 
@@ -242,10 +240,8 @@ export default function Home() {
   // 括号映射：用于自动补全
   const closingBracketMap = { '{': '}', '[': ']' };
 
-  /**
-   * 从文本中提取平衡的 JSON 片段（使用栈追踪括号匹配）
-   * 这个函数比简单的正则更可靠，可以正确处理嵌套结构
-   */
+  // 从文本中提取平衡的 JSON 片段（使用栈追踪括号匹配）
+  // 这个函数比简单的正则更可靠，可以正确处理嵌套结构
   const extractBalancedJsonSnippet = (text) => {
     const stack = [];
     let startIndex = -1;
@@ -307,10 +303,8 @@ export default function Home() {
     return null;
   };
 
-  /**
-   * 分析 JSON 结构，检测括号平衡性和缺失的括号
-   * 返回诊断信息帮助用户理解问题
-   */
+  // 分析 JSON 结构，检测括号平衡性和缺失的括号
+  // 返回诊断信息帮助用户理解问题
   const analyzeJsonStructure = (text) => {
     const stack = [];
     let inString = false;
@@ -370,10 +364,8 @@ export default function Home() {
     };
   };
 
-  /**
-   * 统一检查解析后的数据，提取 elements 数组
-   * 支持多种常见的数据结构
-   */
+  // 统一检查解析后的数据，提取 elements 数组
+  // 支持多种常见的数据结构
   const inspectParsedElements = (parsed) => {
     // 直接是数组
     if (Array.isArray(parsed)) {
@@ -535,10 +527,8 @@ export default function Home() {
       const structureAnalysis = analyzeJsonStructure(cleanedCode);
       const parseDiagnostics = [];
 
-      /**
-       * Helper function to append diagnostic messages while preventing duplicates
-       * and limiting the total number of diagnostics to avoid overwhelming the user
-       */
+      // Helper function to append diagnostic messages while preventing duplicates
+      // and limiting the total number of diagnostics to avoid overwhelming the user
       const appendDiagnostic = (message) => {
         if (!message || typeof message !== 'string') return;
         // Limit diagnostics to 2 most relevant messages
